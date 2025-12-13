@@ -4,7 +4,7 @@ import streamlit as st
 import os
 
 # API Base URL
-API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/api")
 
 
 class APIClient:

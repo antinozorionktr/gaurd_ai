@@ -185,7 +185,6 @@ class GateVerificationResponse(BaseModel):
     visitor_name: Optional[str] = None
     visitor_id: Optional[int] = None
     confidence: Optional[float] = None
-    denial_reason: Optional[str] = None
     entry_log_id: int
     watchlist_alert: Optional[dict] = None
     requires_manual_check: bool = False
