@@ -213,7 +213,10 @@ with tabs[tab_index]:
                 "low": "🟢"
             }
             
-            with st.expander(f"{severity_colors.get(severity, '⚪')} {person.get('full_name', 'N/A')} - {person.get('category', 'N/A').title()}"):
+            # Show face status
+            has_face = "📸" if person.get('face_image_url') else "👤"
+            
+            with st.expander(f"{severity_colors.get(severity, '⚪')} {has_face} {person.get('full_name', 'N/A')} - {person.get('category', 'N/A').title()}"):
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -225,10 +228,12 @@ with tabs[tab_index]:
                     """)
                 
                 with col2:
+                    face_status = "✅ Face registered" if person.get('face_image_url') else "❌ No face"
                     st.markdown(f"""
                     **Severity:** {severity_colors.get(severity, '⚪')} {severity.upper()}  
                     **Reason:** {person.get('reason', 'N/A')}  
-                    **Added:** {person.get('created_at', 'N/A')[:10] if person.get('created_at') else 'N/A'}
+                    **Added:** {person.get('created_at', 'N/A')[:10] if person.get('created_at') else 'N/A'}  
+                    **Face:** {face_status}
                     """)
                 
                 # Image handling
@@ -237,7 +242,7 @@ with tabs[tab_index]:
                     if image_path:
                         st.image(image_path, width=150)
                     else:
-                        st.caption("📷 Image not available")
+                        st.caption("📷 Image not available locally")
                 
                 # Delete button (only if permitted)
                 if can_delete:
@@ -258,6 +263,67 @@ if can_create:
     with tabs[tab_index]:
         st.markdown("### Add Person to Watchlist")
         
+        # Initialize session state for face image
+        if "watchlist_face_image_base64" not in st.session_state:
+            st.session_state.watchlist_face_image_base64 = None
+        if "watchlist_face_preview" not in st.session_state:
+            st.session_state.watchlist_face_preview = None
+        
+        # ========== PHOTO CAPTURE SECTION (OUTSIDE FORM) ==========
+        st.markdown("---")
+        st.markdown("**📷 Photo (for face recognition alerts)**")
+        
+        photo_option = st.radio(
+            "Choose option:",
+            ["Upload Photo", "Capture with Camera"],
+            horizontal=True,
+            key="watchlist_photo_option"
+        )
+        
+        col_photo1, col_photo2 = st.columns([2, 1])
+        
+        with col_photo1:
+            if photo_option == "Upload Photo":
+                uploaded_file = st.file_uploader(
+                    "Upload photo",
+                    type=["jpg", "jpeg", "png"],
+                    key="watchlist_upload",
+                    help="Clear front-facing photo for best recognition"
+                )
+                if uploaded_file:
+                    # Read and store in session state immediately
+                    file_bytes = uploaded_file.read()
+                    st.session_state.watchlist_face_image_base64 = base64.b64encode(file_bytes).decode()
+                    st.session_state.watchlist_face_preview = file_bytes
+                    st.success("✅ Photo captured!")
+            else:
+                camera_photo = st.camera_input("Take a photo", key="watchlist_camera")
+                if camera_photo:
+                    # Read and store in session state immediately
+                    file_bytes = camera_photo.read()
+                    st.session_state.watchlist_face_image_base64 = base64.b64encode(file_bytes).decode()
+                    st.session_state.watchlist_face_preview = file_bytes
+                    st.success("✅ Photo captured!")
+        
+        with col_photo2:
+            if st.session_state.watchlist_face_preview:
+                st.image(st.session_state.watchlist_face_preview, caption="Captured Photo", width=200)
+                if st.button("🗑️ Clear Photo", key="clear_watchlist_photo"):
+                    st.session_state.watchlist_face_image_base64 = None
+                    st.session_state.watchlist_face_preview = None
+                    st.rerun()
+            else:
+                st.info("No photo captured yet")
+        
+        # Show face status
+        if st.session_state.watchlist_face_image_base64:
+            st.success(f"📸 Face image ready ({len(st.session_state.watchlist_face_image_base64)} chars)")
+        else:
+            st.warning("⚠️ No face image - this person won't trigger automatic alerts at gates!")
+        
+        st.markdown("---")
+        
+        # ========== PERSON DETAILS FORM ==========
         with st.form("add_watchlist"):
             col1, col2 = st.columns(2)
             
@@ -285,36 +351,19 @@ if can_create:
                 last_known_address = st.text_input("Last Known Address")
                 physical_description = st.text_area("Physical Description", placeholder="Height, build, distinguishing features...")
             
-            st.markdown("**Photo (for face recognition)**")
-            photo_option = st.radio(
-                "Choose option:",
-                ["Upload Photo", "Capture with Camera"],
-                horizontal=True,
-                key="watchlist_photo"
-            )
+            # Show reminder about photo
+            if not st.session_state.watchlist_face_image_base64:
+                st.warning("⚠️ No photo uploaded. This person will NOT be automatically detected at gates!")
             
-            face_image_base64 = None
-            
-            if photo_option == "Upload Photo":
-                uploaded_file = st.file_uploader(
-                    "Upload photo",
-                    type=["jpg", "jpeg", "png"],
-                    key="watchlist_upload"
-                )
-                if uploaded_file:
-                    face_image_base64 = base64.b64encode(uploaded_file.read()).decode()
-                    st.image(uploaded_file, caption="Uploaded Photo", width=200)
-            else:
-                camera_photo = st.camera_input("Take a photo", key="watchlist_camera")
-                if camera_photo:
-                    face_image_base64 = base64.b64encode(camera_photo.read()).decode()
-            
-            submitted = st.form_submit_button("➕ Add to Watchlist", use_container_width=True)
+            submitted = st.form_submit_button("➕ Add to Watchlist", use_container_width=True, type="primary")
             
             if submitted:
                 if not full_name or not reason:
                     st.error("Please fill in required fields (Name, Reason)")
                 else:
+                    # Get face image from session state (THIS IS THE FIX!)
+                    face_image_base64 = st.session_state.watchlist_face_image_base64
+                    
                     person_data = {
                         "full_name": full_name,
                         "alias": alias if alias else None,
@@ -324,19 +373,35 @@ if can_create:
                         "reason": reason,
                         "last_known_address": last_known_address if last_known_address else None,
                         "physical_description": physical_description if physical_description else None,
-                        "face_image_base64": face_image_base64
+                        "face_image_base64": face_image_base64  # From session state!
                     }
+                    
+                    # Debug: Show what we're sending
+                    if face_image_base64:
+                        st.info(f"📤 Sending with face image ({len(face_image_base64)} chars)")
+                    else:
+                        st.warning("📤 Sending WITHOUT face image - no automatic detection!")
                     
                     with st.spinner("Adding to watchlist..."):
                         try:
                             result = api_client.add_to_watchlist(person_data, user_id)
                             
                             if "error" not in result:
+                                # Clear the face image from session state after success
+                                st.session_state.watchlist_face_image_base64 = None
+                                st.session_state.watchlist_face_preview = None
+                                
                                 st.success(f"✅ {full_name} added to watchlist")
+                                
+                                # Show face indexing status
+                                if result.get('face_image_url'):
+                                    st.success("✅ Face registered - automatic gate alerts enabled!")
+                                else:
+                                    st.warning("⚠️ No face registered - manual identification only")
                             else:
                                 st.error(f"Failed: {result.get('error')}")
-                        except:
-                            st.success(f"Demo: {full_name} added to watchlist")
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
 
 # Alert History (only if can view alerts)
 if can_view_alerts:
@@ -409,4 +474,14 @@ with st.sidebar:
     - 🟠 **High** - Serious concern
     - 🟡 **Medium** - Moderate risk
     - 🟢 **Low** - Minor concern
+    """)
+    
+    st.markdown("---")
+    
+    st.markdown("### 💡 Tips")
+    st.markdown("""
+    - **Always upload a photo** for automatic gate detection
+    - Without a photo, guards must manually identify
+    - Use clear, front-facing photos
+    - Higher severity = faster alerts
     """)

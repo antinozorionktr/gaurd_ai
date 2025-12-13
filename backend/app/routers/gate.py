@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone
+import logging
 
 from ..database import get_db
 from ..models.entry_log import EntryLog, EntryStatus, EntryType, VerificationMethod
@@ -15,6 +16,7 @@ from ..services.visitor_service import visitor_service
 from ..services.watchlist_service import watchlist_service
 
 router = APIRouter(prefix="/gate", tags=["Gate Verification"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/verify", response_model=GateVerificationResponse)
@@ -42,9 +44,12 @@ def verify_entry(
         match = watchlist_result['best_match']
         confidence = match['confidence']
         
-        # Get watchlist person from DB using face_id (not person_id which is a string like "watchlist_Harsh_Sharma")
+        # Get watchlist person from DB using face_id
         from ..models.watchlist import WatchlistPerson
         face_id = match.get('face_id')
+        
+        logger.info(f"Watchlist match found - face_id: {face_id}, confidence: {confidence}")
+        
         person = db.query(WatchlistPerson).filter(
             WatchlistPerson.face_id == face_id,
             WatchlistPerson.is_active == True
@@ -134,13 +139,34 @@ def verify_entry(
     # Check if we have a match
     if search_result.get('match_found') and search_result.get('best_match'):
         match = search_result['best_match']
-        person_type = match['person_type']
-        confidence = match['confidence']
+        person_type = match.get('person_type')
+        confidence = match.get('confidence', 0)
+        face_id = match.get('face_id')
+        person_name = match.get('person_name', 'Unknown')
+        
+        logger.info(f"Match found - type: {person_type}, face_id: {face_id}, name: {person_name}, confidence: {confidence}")
         
         if person_type == 'visitor':
             # Get visitor from DB using face_id
-            face_id = match.get('face_id')
+            # IMPORTANT: face_id in FAISS metadata should match face_id in Visitor table
             visitor = db.query(Visitor).filter(Visitor.face_id == face_id).first()
+            
+            # DEBUG: If not found by face_id, log all visitors with their face_ids
+            if not visitor:
+                logger.warning(f"Visitor not found by face_id: {face_id}")
+                
+                # Try to find by name as fallback (not ideal but helps debugging)
+                all_visitors = db.query(Visitor).filter(Visitor.face_id.isnot(None)).all()
+                logger.debug(f"All visitors with face_id: {[(v.id, v.full_name, v.face_id) for v in all_visitors]}")
+                
+                # Attempt lookup by name match (temporary workaround)
+                if person_name:
+                    visitor = db.query(Visitor).filter(
+                        Visitor.full_name == person_name,
+                        Visitor.face_id.isnot(None)
+                    ).first()
+                    if visitor:
+                        logger.info(f"Found visitor by name match: {visitor.full_name} (id: {visitor.id})")
             
             if visitor:
                 # Validate visitor entry
@@ -202,23 +228,47 @@ def verify_entry(
                         denial_reason=message,
                         entry_log_id=entry_log.id
                     )
+            else:
+                # Face matched but visitor record not found in DB
+                # This could happen if face was indexed but DB record was deleted
+                logger.warning(f"Face matched ({person_name}) but no visitor record found for face_id: {face_id}")
+                
+                # Still show as recognized but require manual verification
+                entry_log = EntryLog(
+                    entry_type=EntryType.ENTRY,
+                    gate_id=request.gate_id,
+                    person_name=person_name,
+                    status=EntryStatus.MANUAL_VERIFICATION,
+                    verification_method=VerificationMethod.FACE_RECOGNITION,
+                    face_match_confidence=confidence,
+                    captured_image_url=captured_image_url,
+                    verified_by=verified_by,
+                    notes=f"Face recognized as {person_name} (confidence: {confidence:.1%}) but visitor record not found"
+                )
+                db.add(entry_log)
+                db.commit()
+                db.refresh(entry_log)
+                
+                return GateVerificationResponse(
+                    status=EntryStatus.MANUAL_VERIFICATION,
+                    message=f"⚠️ Face recognized as {person_name} ({confidence:.1%}) but record not found. Manual verification required.",
+                    visitor_name=person_name,
+                    confidence=confidence,
+                    entry_log_id=entry_log.id,
+                    requires_manual_check=True
+                )
         
         elif person_type == 'resident':
             # Resident entry - always allowed
-            # For residents, we need to handle the person_id appropriately
-            # If residents use numeric IDs, extract it; otherwise use face_id lookup
             person_name = match.get('person_name', 'Resident')
             person_id_str = match.get('person_id', '')
             
             # Try to extract numeric resident_id if the format allows
             resident_id = None
             if person_id_str:
-                # Check if person_id is numeric or can be parsed
                 try:
                     resident_id = int(person_id_str)
                 except ValueError:
-                    # person_id is not numeric (e.g., "resident_John_Doe")
-                    # Leave resident_id as None
                     pass
             
             entry_log = EntryLog(
@@ -227,7 +277,7 @@ def verify_entry(
                 resident_id=resident_id,
                 person_name=person_name,
                 status=EntryStatus.ALLOWED,
-                verification_method=VerificationMethod.RESIDENT_FACE,
+                verification_method=VerificationMethod.FACE_RECOGNITION,
                 face_match_confidence=confidence,
                 captured_image_url=captured_image_url,
                 verified_by=verified_by
@@ -238,12 +288,17 @@ def verify_entry(
             
             return GateVerificationResponse(
                 status=EntryStatus.ALLOWED,
-                message=f"✅ Resident entry allowed",
+                message=f"✅ Resident entry allowed for {person_name}",
+                visitor_name=person_name,
                 confidence=confidence,
                 entry_log_id=entry_log.id
             )
     
     # No matches found - manual verification needed
+    # Include best score for debugging
+    best_score = search_result.get('best_score', 0)
+    threshold = search_result.get('threshold', 0)
+    
     entry_log = EntryLog(
         entry_type=EntryType.ENTRY,
         gate_id=request.gate_id,
@@ -251,7 +306,7 @@ def verify_entry(
         verification_method=VerificationMethod.MANUAL,
         captured_image_url=captured_image_url,
         verified_by=verified_by,
-        denial_reason="No matching face found in database",
+        denial_reason=f"No matching face found (best score: {best_score:.3f}, threshold: {threshold})",
         notes="Person not recognized - manual verification required"
     )
     db.add(entry_log)
@@ -260,7 +315,7 @@ def verify_entry(
     
     return GateVerificationResponse(
         status=EntryStatus.MANUAL_VERIFICATION,
-        message="⚠️ Person not recognized. Manual verification required.",
+        message=f"⚠️ Person not recognized (best match: {best_score:.1%}). Manual verification required.",
         entry_log_id=entry_log.id,
         requires_manual_check=True
     )
@@ -448,3 +503,40 @@ def get_entry_log(entry_log_id: int, db: Session = Depends(get_db)):
     if not log:
         raise HTTPException(status_code=404, detail="Entry log not found")
     return log
+
+
+# Debug endpoint to check face_id mapping
+@router.get("/debug/face-mapping")
+def debug_face_mapping(db: Session = Depends(get_db)):
+    """Debug endpoint to check face_id mapping between FAISS and DB"""
+    
+    # Get all visitors with face_ids
+    visitors = db.query(Visitor).filter(Visitor.face_id.isnot(None)).all()
+    visitor_face_ids = {v.face_id: {"name": v.full_name, "id": v.id} for v in visitors}
+    
+    # Get FAISS stats
+    faiss_stats = face_service.get_stats()
+    
+    # Get FAISS metadata
+    faiss_metadata = {}
+    if hasattr(face_service, 'faiss') and hasattr(face_service.faiss, 'metadata'):
+        for idx, meta in face_service.faiss.metadata.items():
+            faiss_metadata[meta.get('face_id', f'unknown_{idx}')] = {
+                "person_name": meta.get('person_name'),
+                "person_type": meta.get('person_type'),
+                "person_id": meta.get('person_id')
+            }
+    
+    # Find mismatches
+    db_only = set(visitor_face_ids.keys()) - set(faiss_metadata.keys())
+    faiss_only = set(faiss_metadata.keys()) - set(visitor_face_ids.keys())
+    
+    return {
+        "db_visitors_with_face": len(visitor_face_ids),
+        "faiss_faces": faiss_stats.get('total_faces', 0),
+        "db_face_ids": list(visitor_face_ids.keys()),
+        "faiss_face_ids": list(faiss_metadata.keys()),
+        "in_db_not_faiss": list(db_only),
+        "in_faiss_not_db": list(faiss_only),
+        "faiss_metadata_sample": dict(list(faiss_metadata.items())[:5])
+    }

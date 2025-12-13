@@ -73,6 +73,67 @@ if can_create:
         else:
             st.markdown("### Register New Visitor")
         
+        # Initialize session state for face image
+        if "visitor_face_image_base64" not in st.session_state:
+            st.session_state.visitor_face_image_base64 = None
+        if "visitor_face_preview" not in st.session_state:
+            st.session_state.visitor_face_preview = None
+        
+        # ========== PHOTO CAPTURE SECTION (OUTSIDE FORM) ==========
+        st.markdown("---")
+        st.markdown("**📷 Visitor Photo (for face recognition)**")
+        
+        photo_option = st.radio(
+            "Choose option:",
+            ["Upload Photo", "Capture with Camera"],
+            horizontal=True,
+            key="photo_option_radio"
+        )
+        
+        col_photo1, col_photo2 = st.columns([2, 1])
+        
+        with col_photo1:
+            if photo_option == "Upload Photo":
+                uploaded_file = st.file_uploader(
+                    "Upload visitor's photo",
+                    type=["jpg", "jpeg", "png"],
+                    help="Clear front-facing photo for best recognition",
+                    key="visitor_photo_upload"
+                )
+                if uploaded_file:
+                    # Read and store in session state immediately
+                    file_bytes = uploaded_file.read()
+                    st.session_state.visitor_face_image_base64 = base64.b64encode(file_bytes).decode()
+                    st.session_state.visitor_face_preview = file_bytes
+                    st.success("✅ Photo captured!")
+            else:
+                camera_photo = st.camera_input("Take a photo", key="visitor_camera")
+                if camera_photo:
+                    # Read and store in session state immediately
+                    file_bytes = camera_photo.read()
+                    st.session_state.visitor_face_image_base64 = base64.b64encode(file_bytes).decode()
+                    st.session_state.visitor_face_preview = file_bytes
+                    st.success("✅ Photo captured!")
+        
+        with col_photo2:
+            if st.session_state.visitor_face_preview:
+                st.image(st.session_state.visitor_face_preview, caption="Captured Photo", width=200)
+                if st.button("🗑️ Clear Photo"):
+                    st.session_state.visitor_face_image_base64 = None
+                    st.session_state.visitor_face_preview = None
+                    st.rerun()
+            else:
+                st.info("No photo captured yet")
+        
+        # Show face status
+        if st.session_state.visitor_face_image_base64:
+            st.success(f"📸 Face image ready ({len(st.session_state.visitor_face_image_base64)} chars)")
+        else:
+            st.warning("⚠️ No face image - visitor will need to use approval code only")
+        
+        st.markdown("---")
+        
+        # ========== VISITOR DETAILS FORM ==========
         with st.form("visitor_form"):
             col1, col2 = st.columns(2)
             
@@ -114,43 +175,24 @@ if can_create:
                     options=["None", "Car", "Bike", "Auto", "Truck", "Other"]
                 )
             
-            st.markdown("---")
-            
-            # Photo capture
-            st.markdown("**Visitor Photo (for face recognition)**")
-            photo_option = st.radio(
-                "Choose option:",
-                ["Upload Photo", "Capture with Camera"],
-                horizontal=True
-            )
-            
-            face_image_base64 = None
-            
-            if photo_option == "Upload Photo":
-                uploaded_file = st.file_uploader(
-                    "Upload visitor's photo",
-                    type=["jpg", "jpeg", "png"],
-                    help="Clear front-facing photo for best recognition"
-                )
-                if uploaded_file:
-                    face_image_base64 = base64.b64encode(uploaded_file.read()).decode()
-                    st.image(uploaded_file, caption="Uploaded Photo", width=200)
-            else:
-                camera_photo = st.camera_input("Take a photo")
-                if camera_photo:
-                    face_image_base64 = base64.b64encode(camera_photo.read()).decode()
-            
             notes = st.text_area("Additional Notes", placeholder="Any special instructions...")
             
-            submitted = st.form_submit_button("✅ Approve Visitor", use_container_width=True)
+            # Show reminder about photo
+            if not st.session_state.visitor_face_image_base64:
+                st.warning("⚠️ No photo uploaded. Face recognition will not be available for this visitor.")
+            
+            submitted = st.form_submit_button("✅ Approve Visitor", use_container_width=True, type="primary")
             
             if submitted:
                 if not full_name or not visiting_unit:
                     st.error("Please fill in all required fields (Name, Visiting Unit)")
                 else:
-                    # Prepare visitor data
+                    # Prepare visitor data - GET FACE FROM SESSION STATE
                     valid_from_dt = datetime.combine(valid_from, from_time)
                     valid_until_dt = datetime.combine(valid_until, until_time)
+                    
+                    # Get face image from session state (THIS IS THE FIX!)
+                    face_image_base64 = st.session_state.visitor_face_image_base64
                     
                     visitor_data = {
                         "full_name": full_name,
@@ -165,14 +207,24 @@ if can_create:
                         "vehicle_number": vehicle_number if vehicle_number else None,
                         "vehicle_type": vehicle_type if vehicle_type != "None" else None,
                         "notes": notes if notes else None,
-                        "face_image_base64": face_image_base64
+                        "face_image_base64": face_image_base64  # From session state!
                     }
+                    
+                    # Debug: Show what we're sending
+                    if face_image_base64:
+                        st.info(f"📤 Sending with face image ({len(face_image_base64)} chars)")
+                    else:
+                        st.warning("📤 Sending WITHOUT face image")
                     
                     with st.spinner("Creating visitor approval..."):
                         try:
                             result = api_client.create_visitor(visitor_data, user_id)
                             
                             if "error" not in result:
+                                # Clear the face image from session state after success
+                                st.session_state.visitor_face_image_base64 = None
+                                st.session_state.visitor_face_preview = None
+                                
                                 st.success(f"""
                                 ✅ **Visitor Approved Successfully!**
                                 
@@ -181,41 +233,34 @@ if can_create:
                                 Share this code with the visitor for gate entry.
                                 """)
                                 
+                                # Show face indexing status
+                                if result.get('face_image_url'):
+                                    st.success("✅ Face registered for recognition!")
+                                else:
+                                    st.warning("⚠️ No face registered - visitor must use approval code")
+                                
                                 st.info("💡 The visitor can show this code at the gate for verification")
                             else:
                                 st.error(f"Failed to create visitor: {result.get('error')}")
                         except Exception as e:
-                            # Show mock success for demo
-                            import random
-                            import string
-                            mock_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-                            st.success(f"""
-                            ✅ **Visitor Approved (Demo Mode)**
-                            
-                            **Approval Code:** `{mock_code}`
-                            """)
+                            st.error(f"Error: {str(e)}")
     
     tab_index += 1
 
 # ==================== ALL VISITORS TAB ====================
 if can_read:
     with tabs[tab_index]:
-        if is_resident():
-            st.markdown("### My Approved Visitors")
-            st.caption("Visitors you have pre-approved")
-        else:
-            st.markdown("### All Visitors")
+        st.markdown("### All Visitors" if not is_resident() else "### My Visitors")
         
         # Filters
         col1, col2, col3 = st.columns(3)
         with col1:
             status_filter = st.selectbox(
-                "Filter by Status",
-                options=["All", "approved", "checked_in", "checked_out", "expired", "cancelled"],
-                format_func=lambda x: x.title() if x != "All" else x
+                "Status",
+                ["All", "approved", "checked_in", "checked_out", "expired", "cancelled"]
             )
         with col2:
-            search_term = st.text_input("Search", placeholder="Name or code...")
+            search_term = st.text_input("Search", placeholder="Name, phone, or code")
         with col3:
             if st.button("🔄 Refresh"):
                 st.rerun()
@@ -253,7 +298,10 @@ if can_read:
                     "cancelled": "🔴"
                 }
                 
-                with st.expander(f"{status_emoji.get(status, '❓')} {visitor.get('full_name', 'N/A')} - {visitor.get('approval_code', 'N/A')}"):
+                # Show face status
+                has_face = "📸" if visitor.get('face_image_url') else "👤"
+                
+                with st.expander(f"{status_emoji.get(status, '❓')} {has_face} {visitor.get('full_name', 'N/A')} - {visitor.get('approval_code', 'N/A')}"):
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
@@ -271,9 +319,11 @@ if can_read:
                         """)
                     
                     with col3:
+                        face_status = "✅ Face registered" if visitor.get('face_image_url') else "❌ No face"
                         st.markdown(f"""
                         **Valid From:** {visitor.get('valid_from', 'N/A')[:16] if visitor.get('valid_from') else 'N/A'}  
-                        **Valid Until:** {visitor.get('valid_until', 'N/A')[:16] if visitor.get('valid_until') else 'N/A'}
+                        **Valid Until:** {visitor.get('valid_until', 'N/A')[:16] if visitor.get('valid_until') else 'N/A'}  
+                        **Face:** {face_status}
                         """)
                     
                     # Action buttons based on permissions and status
@@ -380,6 +430,7 @@ with st.sidebar:
         st.markdown("""
         - Pre-approve visitors before they arrive
         - Share the approval code with your guest
+        - **Upload a photo for face recognition!**
         - You can cancel approvals anytime
         - Expired approvals are auto-removed
         """)
@@ -402,4 +453,8 @@ with st.sidebar:
         - ⚪ Checked Out - Has left
         - 🔴 Cancelled - Approval revoked
         - ⚫ Expired - Time window passed
+        
+        **Face Status:**
+        - 📸 = Face registered
+        - 👤 = No face (code only)
         """)

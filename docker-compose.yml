@@ -32,6 +32,8 @@ services:
       - AWS_REGION=${AWS_REGION:-ap-south-1}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:-smart-gate-faces}
       - REKOGNITION_COLLECTION_ID=${REKOGNITION_COLLECTION_ID:-smart-gate-faces}
+      - WATCHLIST_THRESHOLD=0.55
+      - VISITOR_THRESHOLD=0.45
     ports:
       - "8000:8000"
     depends_on:
@@ -48,7 +50,7 @@ services:
       dockerfile: Dockerfile
     container_name: smart_gate_frontend
     environment:
-      - API_BASE_URL=http://backend:8000
+      - API_BASE_URL=http://backend:8000/api
     ports:
       - "8501:8501"
     depends_on:
