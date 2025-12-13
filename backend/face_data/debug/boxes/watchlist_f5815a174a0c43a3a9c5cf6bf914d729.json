@@ -1,0 +1,13 @@
+[
+  {
+    "index": 0,
+    "confidence": 1.0,
+    "box": {
+      "x": 571,
+      "y": 291,
+      "w": 222,
+      "h": 300
+    },
+    "crop_path": "face_data/debug/crops/watchlist_f5815a174a0c43a3a9c5cf6bf914d729_0.jpg"
+  }
+]
