@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 
 # Page configuration - must be first Streamlit command
@@ -10,7 +11,7 @@ st.set_page_config(
 
 # API Base URL configuration
 if "api_base_url" not in st.session_state:
-    st.session_state.api_base_url = "http://localhost:8000"
+    st.session_state.api_base_url = os.environ.get("API_BASE_URL", "http://backend:8000")
 
 # Import permissions after session state is available
 from utils.permissions import (

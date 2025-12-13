@@ -4,10 +4,12 @@ Authentication Service - JWT tokens, password hashing, RBAC
 
 import secrets
 import logging
+import hashlib
+import base64
+import bcrypt
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
 from jose import JWTError, jwt
 
 from ..models.user import User, UserRole
@@ -18,9 +20,6 @@ from ..schemas.auth import (
 from ..config import settings
 
 logger = logging.getLogger(__name__)
-
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT Settings
 SECRET_KEY = getattr(settings, 'SECRET_KEY', 'your-super-secret-key-change-in-production')
@@ -35,14 +34,32 @@ class AuthService:
     # ==================== Password Handling ====================
     
     @staticmethod
+    def _prepare_password(password: str) -> bytes:
+        """
+        Prepare password for bcrypt by pre-hashing with SHA-256.
+        This ensures passwords of any length work with bcrypt's 72-byte limit.
+        Returns bytes ready for bcrypt (44 bytes, well under 72 limit).
+        """
+        password_hash = hashlib.sha256(password.encode('utf-8')).digest()
+        return base64.b64encode(password_hash)
+    
+    @staticmethod
     def hash_password(password: str) -> str:
-        """Hash a password"""
-        return pwd_context.hash(password)
+        """Hash a password using bcrypt with SHA-256 pre-hashing"""
+        prepared = AuthService._prepare_password(password)
+        salt = bcrypt.gensalt(rounds=12)
+        hashed = bcrypt.hashpw(prepared, salt)
+        return hashed.decode('utf-8')
     
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Verify a password against hash"""
-        return pwd_context.verify(plain_password, hashed_password)
+        try:
+            prepared = AuthService._prepare_password(plain_password)
+            return bcrypt.checkpw(prepared, hashed_password.encode('utf-8'))
+        except Exception as e:
+            logger.warning(f"Password verification error: {e}")
+            return False
     
     # ==================== Token Handling ====================
     

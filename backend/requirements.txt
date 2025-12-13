@@ -28,3 +28,6 @@ passlib[bcrypt]==1.7.4
 # Development
 httpx==0.26.0
 pytest==7.4.4
+
+tf-keras
+faiss-cpu

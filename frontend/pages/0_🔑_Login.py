@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import requests
 from datetime import datetime
@@ -11,7 +12,7 @@ st.set_page_config(
 )
 
 # API Base URL
-API_BASE = st.session_state.get("api_base_url", "http://localhost:8000")
+API_BASE = st.session_state.get("api_base_url", "http://backend:8000")
 
 # Custom CSS
 st.markdown("""

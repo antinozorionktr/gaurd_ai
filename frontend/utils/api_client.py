@@ -4,7 +4,7 @@ import streamlit as st
 import os
 
 # API Base URL
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/")
 
 
 class APIClient:
@@ -67,11 +67,7 @@ class APIClient:
                     return {"error": "Session expired. Please login again."}
             
             response.raise_for_status()
-            try:
-                return response.json()
-            except ValueError:
-                # Backend returned no/invalid JSON; wrap this as an error response
-                return {"error": f"Invalid JSON response (status {response.status_code})"}
+            return response.json()
             
         except requests.exceptions.RequestException as e:
             error_msg = str(e)
