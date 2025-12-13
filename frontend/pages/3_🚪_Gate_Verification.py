@@ -5,6 +5,10 @@ import base64
 import sys
 sys.path.append("..")
 from utils.api_client import api_client
+from utils.permissions import (
+    require_auth, has_permission, is_resident,
+    Permission, show_permission_denied, get_role_display_name
+)
 
 st.set_page_config(
     page_title="Gate Verification - Smart Gate Security",
@@ -12,12 +16,29 @@ st.set_page_config(
     layout="wide"
 )
 
+# Check authentication
+if not require_auth():
+    st.stop()
+
+# Check gate verification permission - Residents should NOT have access
+if not has_permission(Permission.GATE_VERIFY.value):
+    show_permission_denied()
+    st.info("Gate verification is only available to security staff and receptionists.")
+    st.stop()
+
+# Additional check - explicitly block residents even if they somehow have the permission
+if is_resident():
+    st.error("🚫 Access Denied")
+    st.markdown("Gate verification is not available for residents. Please use the **Visitor Approval** page to manage your visitors.")
+    if st.button("Go to Visitor Approval"):
+        st.switch_page("pages/2_👤_Visitor_Approval.py")
+    st.stop()
+
 st.title("🚪 Gate Entry Verification")
 st.markdown("Verify visitor identity using face recognition or approval code")
 
 # Initialize session state
-if "user_id" not in st.session_state:
-    st.session_state.user_id = 1
+user_id = st.session_state.get("user_id", 1)
 
 if "verification_result" not in st.session_state:
     st.session_state.verification_result = None
@@ -85,7 +106,7 @@ with tab1:
                 result = api_client.verify_entry(
                     face_image_base64=face_image_base64,
                     gate_id=gate_id,
-                    verified_by=st.session_state.user_id
+                    verified_by=user_id
                 )
                 st.session_state.verification_result = result
     
@@ -128,41 +149,49 @@ with tab1:
                 **DO NOT ALLOW ENTRY - Contact Security Supervisor**
                 """)
                 
+                # Alert actions
+                if has_permission(Permission.GATE_MANUAL_OVERRIDE.value):
+                    st.warning("Manual override available for authorized personnel only")
+                
             elif status == "manual_verification":
                 st.warning(result.get("message", "Manual verification required"))
                 st.markdown("Person not found in database. Please verify manually.")
                 
-                with st.form("manual_verify"):
-                    person_name = st.text_input("Enter Person's Name")
-                    allow_reason = st.text_area("Notes (if allowing)")
-                    
-                    col_allow, col_deny = st.columns(2)
-                    
-                    with col_allow:
-                        allow_btn = st.form_submit_button("✅ Allow Entry", use_container_width=True)
-                    with col_deny:
-                        deny_btn = st.form_submit_button("❌ Deny Entry", use_container_width=True)
-                    
-                    if allow_btn and person_name:
-                        try:
-                            api_client.manual_allow_entry(
-                                result.get("entry_log_id"),
-                                person_name,
-                                allow_reason
-                            )
-                            st.success(f"Entry allowed for {person_name}")
-                        except:
-                            st.success(f"Demo: Entry allowed for {person_name}")
-                    
-                    if deny_btn:
-                        try:
-                            api_client.manual_deny_entry(
-                                result.get("entry_log_id"),
-                                "Manual denial"
-                            )
-                            st.error("Entry denied")
-                        except:
-                            st.error("Demo: Entry denied")
+                # Manual override (only if permitted)
+                if has_permission(Permission.GATE_MANUAL_OVERRIDE.value):
+                    with st.form("manual_verify"):
+                        person_name = st.text_input("Enter Person's Name")
+                        allow_reason = st.text_area("Notes (if allowing)")
+                        
+                        col_allow, col_deny = st.columns(2)
+                        
+                        with col_allow:
+                            allow_btn = st.form_submit_button("✅ Allow Entry", use_container_width=True)
+                        with col_deny:
+                            deny_btn = st.form_submit_button("❌ Deny Entry", use_container_width=True)
+                        
+                        if allow_btn and person_name:
+                            try:
+                                api_client.manual_allow_entry(
+                                    result.get("entry_log_id"),
+                                    person_name,
+                                    allow_reason
+                                )
+                                st.success(f"Entry allowed for {person_name}")
+                            except:
+                                st.success(f"Demo: Entry allowed for {person_name}")
+                        
+                        if deny_btn:
+                            try:
+                                api_client.manual_deny_entry(
+                                    result.get("entry_log_id"),
+                                    "Manual denial"
+                                )
+                                st.error("Entry denied")
+                            except:
+                                st.error("Demo: Entry denied")
+                else:
+                    st.info("Contact supervisor for manual verification approval")
         else:
             st.info("Capture a photo and click 'Verify Identity' to check visitor")
             
@@ -198,7 +227,7 @@ with tab2:
                 result = api_client.verify_by_code(
                     approval_code=approval_code,
                     gate_id=gate_id,
-                    verified_by=st.session_state.user_id
+                    verified_by=user_id
                 )
                 
                 if result.get("status") == "allowed":
@@ -249,52 +278,57 @@ with tab2:
 
 st.markdown("---")
 
-# Recent Entry Logs
-st.markdown("### 📋 Recent Entry Logs")
-
-try:
-    logs_data = api_client.get_todays_logs()
-    logs = logs_data.get("logs", [])
-    stats = logs_data.get("stats", {})
-except:
-    logs = []
-    stats = {"total": 15, "allowed": 12, "denied": 2, "watchlist_alerts": 1}
-
-# Stats row
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Total Today", stats.get("total", 0))
-with col2:
-    st.metric("Allowed", stats.get("allowed", 0))
-with col3:
-    st.metric("Denied", stats.get("denied", 0))
-with col4:
-    st.metric("Alerts", stats.get("watchlist_alerts", 0))
-
-# Logs table
-log_data = []
-for log in logs[:20]:
-    status_emoji = {
-        "allowed": "✅",
-        "denied": "❌",
-        "manual_verification": "⚠️",
-        "watchlist_alert": "🚨"
-    }
-    log_data.append({
-        "Time": log.get("timestamp", "N/A")[:19] if log.get("timestamp") else "N/A",
-        "Status": f"{status_emoji.get(log.get('status', ''), '❓')} {log.get('status', 'N/A')}",
-        "Person": log.get("person_name", "Unknown"),
-        "Gate": log.get("gate_id", "N/A"),
-        "Method": log.get("verification_method", "N/A"),
-        "Confidence": f"{log.get('face_match_confidence', 0):.1f}%" if log.get('face_match_confidence') else "N/A"
-    })
-
-st.dataframe(pd.DataFrame(log_data), use_container_width=True, hide_index=True)
+# Recent Entry Logs (only if permission allows)
+if has_permission(Permission.GATE_LOGS_VIEW.value):
+    st.markdown("### 📋 Recent Entry Logs")
+    
+    try:
+        logs_data = api_client.get_todays_logs()
+        logs = logs_data.get("logs", [])
+        stats = logs_data.get("stats", {})
+    except:
+        logs = []
+        stats = {"total": 0, "allowed": 0, "denied": 0, "watchlist_alerts": 0}
+    
+    # Stats row
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Today", stats.get("total", 0))
+    with col2:
+        st.metric("Allowed", stats.get("allowed", 0))
+    with col3:
+        st.metric("Denied", stats.get("denied", 0))
+    with col4:
+        st.metric("Alerts", stats.get("watchlist_alerts", 0))
+    
+    # Logs table
+    if logs:
+        log_data = []
+        for log in logs[:20]:
+            status_emoji = {
+                "allowed": "✅",
+                "denied": "❌",
+                "manual_verification": "⚠️",
+                "watchlist_alert": "🚨"
+            }
+            log_data.append({
+                "Time": log.get("timestamp", "N/A")[:19] if log.get("timestamp") else "N/A",
+                "Status": f"{status_emoji.get(log.get('status', ''), '❓')} {log.get('status', 'N/A')}",
+                "Person": log.get("person_name", "Unknown"),
+                "Gate": log.get("gate_id", "N/A"),
+                "Method": log.get("verification_method", "N/A"),
+                "Confidence": f"{log.get('face_match_confidence', 0):.1f}%" if log.get('face_match_confidence') else "N/A"
+            })
+        
+        st.dataframe(pd.DataFrame(log_data), use_container_width=True, hide_index=True)
+    else:
+        st.info("No entry logs yet today")
 
 # Sidebar
 with st.sidebar:
     st.markdown("### 🚪 Gate Controls")
     st.markdown(f"**Current Gate:** {gate_id}")
+    st.markdown(f"**Operator:** {st.session_state.get('user_name', 'Unknown')}")
     
     st.markdown("---")
     
@@ -304,8 +338,9 @@ with st.sidebar:
         st.session_state.verification_result = None
         st.rerun()
     
-    if st.button("📋 View All Logs", use_container_width=True):
-        st.info("Opening full logs view...")
+    if has_permission(Permission.GATE_LOGS_VIEW.value):
+        if st.button("📋 View All Logs", use_container_width=True):
+            st.info("Opening full logs view...")
     
     st.markdown("---")
     
@@ -322,3 +357,14 @@ with st.sidebar:
     - Report suspicious activity
     - Never bypass watchlist alerts
     """)
+    
+    st.markdown("---")
+    
+    # Show user's role and permissions
+    st.markdown("### 🔐 Your Access")
+    st.caption(f"Role: {get_role_display_name(st.session_state.get('user_role', 'unknown'))}")
+    
+    if has_permission(Permission.GATE_MANUAL_OVERRIDE.value):
+        st.caption("✅ Manual override: Enabled")
+    else:
+        st.caption("❌ Manual override: Disabled")

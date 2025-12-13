@@ -140,3 +140,5 @@ coverage/
 
 # Keep example env in repo
 !.env.example
+
+.jpg

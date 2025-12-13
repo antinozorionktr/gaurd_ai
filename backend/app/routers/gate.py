@@ -40,12 +40,15 @@ def verify_entry(
     
     if watchlist_result.get('watchlist_match') and watchlist_result.get('best_match'):
         match = watchlist_result['best_match']
-        person_id = int(match['person_id'])
         confidence = match['confidence']
         
-        # Get watchlist person from DB
+        # Get watchlist person from DB using face_id (not person_id which is a string like "watchlist_Harsh_Sharma")
         from ..models.watchlist import WatchlistPerson
-        person = db.query(WatchlistPerson).filter(WatchlistPerson.id == person_id).first()
+        face_id = match.get('face_id')
+        person = db.query(WatchlistPerson).filter(
+            WatchlistPerson.face_id == face_id,
+            WatchlistPerson.is_active == True
+        ).first()
         
         if person:
             # Create alert
@@ -132,12 +135,12 @@ def verify_entry(
     if search_result.get('match_found') and search_result.get('best_match'):
         match = search_result['best_match']
         person_type = match['person_type']
-        person_id = match['person_id']
         confidence = match['confidence']
         
         if person_type == 'visitor':
-            # Get visitor from DB
-            visitor = db.query(Visitor).filter(Visitor.id == int(person_id)).first()
+            # Get visitor from DB using face_id
+            face_id = match.get('face_id')
+            visitor = db.query(Visitor).filter(Visitor.face_id == face_id).first()
             
             if visitor:
                 # Validate visitor entry
@@ -202,11 +205,27 @@ def verify_entry(
         
         elif person_type == 'resident':
             # Resident entry - always allowed
+            # For residents, we need to handle the person_id appropriately
+            # If residents use numeric IDs, extract it; otherwise use face_id lookup
+            person_name = match.get('person_name', 'Resident')
+            person_id_str = match.get('person_id', '')
+            
+            # Try to extract numeric resident_id if the format allows
+            resident_id = None
+            if person_id_str:
+                # Check if person_id is numeric or can be parsed
+                try:
+                    resident_id = int(person_id_str)
+                except ValueError:
+                    # person_id is not numeric (e.g., "resident_John_Doe")
+                    # Leave resident_id as None
+                    pass
+            
             entry_log = EntryLog(
                 entry_type=EntryType.ENTRY,
                 gate_id=request.gate_id,
-                resident_id=int(person_id),
-                person_name=match.get('person_name', 'Resident'),
+                resident_id=resident_id,
+                person_name=person_name,
                 status=EntryStatus.ALLOWED,
                 verification_method=VerificationMethod.RESIDENT_FACE,
                 face_match_confidence=confidence,

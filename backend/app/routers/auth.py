@@ -2,7 +2,7 @@
 Authentication Router - Login, Signup, Token management
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import Optional, List
@@ -85,8 +85,8 @@ def user_to_response(user: User) -> UserResponse:
         full_name=user.full_name,
         phone=user.phone,
         role=user.role,
-        unit_number=user.unit_number,
-        block=user.block,
+        unit_number=user.unit_number,  # Include for residents
+        block=user.block,              # Include for residents
         is_active=user.is_active,
         is_verified=user.is_verified,
         permissions=permissions,
@@ -109,6 +109,13 @@ def signup(signup_data: UserSignup, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot self-register with this role. Contact admin."
+        )
+    
+    # Require unit_number for residents
+    if signup_data.role == UserRole.RESIDENT and not signup_data.unit_number:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unit number is required for residents"
         )
     
     user, error = auth_service.register_user(db, signup_data)

@@ -48,35 +48,6 @@ st.markdown("""
         font-size: 1.8rem;
         margin-top: 1rem;
     }
-    
-    /* Role badge */
-    .role-badge {
-        background: linear-gradient(145deg, #4a148c, #7b1fa2);
-        color: white;
-        padding: 0.25rem 0.75rem;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        display: inline-block;
-        margin-left: 0.5rem;
-    }
-    
-    /* Success message */
-    .success-msg {
-        background: linear-gradient(145deg, #1b5e20, #388e3c);
-        color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        margin-bottom: 1rem;
-    }
-    
-    /* Error message */
-    .error-msg {
-        background: linear-gradient(145deg, #b71c1c, #e53935);
-        color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        margin-bottom: 1rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -111,14 +82,38 @@ def signup(data: dict) -> dict:
         return {"error": str(e)}
 
 
+def store_user_session(result: dict):
+    """Store user data in session state"""
+    st.session_state.authenticated = True
+    st.session_state.access_token = result["access_token"]
+    st.session_state.refresh_token = result["refresh_token"]
+    st.session_state.user_id = result["user"]["id"]
+    st.session_state.user_name = result["user"]["full_name"]
+    st.session_state.user_role = result["user"]["role"]
+    st.session_state.user_email = result["user"]["email"]
+    st.session_state.permissions = result["user"]["permissions"]
+    
+    # Store unit info for residents
+    if result["user"].get("unit_number"):
+        st.session_state.unit_number = result["user"]["unit_number"]
+    if result["user"].get("block"):
+        st.session_state.block = result["user"]["block"]
+
+
 def main():
     # Check if already logged in
     if st.session_state.get("authenticated"):
         st.success(f"✅ Already logged in as {st.session_state.get('user_name')}")
-        if st.button("Go to Dashboard"):
+        
+        role = st.session_state.get('user_role', '')
+        
+        if st.button("Go to Dashboard", type="primary"):
             st.switch_page("pages/1_🏠_Dashboard.py")
+        
         if st.button("Logout"):
-            for key in ["authenticated", "access_token", "refresh_token", "user_id", "user_name", "user_role", "user_email", "permissions"]:
+            for key in ["authenticated", "access_token", "refresh_token", "user_id", 
+                       "user_name", "user_role", "user_email", "permissions", 
+                       "unit_number", "block"]:
                 st.session_state.pop(key, None)
             st.rerun()
         return
@@ -161,15 +156,7 @@ def main():
                     if "error" in result:
                         st.error(f"❌ {result['error']}")
                     else:
-                        # Store auth data in session
-                        st.session_state.authenticated = True
-                        st.session_state.access_token = result["access_token"]
-                        st.session_state.refresh_token = result["refresh_token"]
-                        st.session_state.user_id = result["user"]["id"]
-                        st.session_state.user_name = result["user"]["full_name"]
-                        st.session_state.user_role = result["user"]["role"]
-                        st.session_state.user_email = result["user"]["email"]
-                        st.session_state.permissions = result["user"]["permissions"]
+                        store_user_session(result)
                         
                         st.success(f"✅ Welcome back, {result['user']['full_name']}!")
                         st.balloons()
@@ -198,9 +185,10 @@ def main():
             
             # Additional fields for residents
             if role == "resident":
+                st.markdown("**Resident Details**")
                 col1, col2 = st.columns(2)
                 with col1:
-                    unit_number = st.text_input("Unit Number", placeholder="A-101")
+                    unit_number = st.text_input("Unit Number *", placeholder="A-101")
                 with col2:
                     block = st.text_input("Block/Tower", placeholder="Block A")
             else:
@@ -219,6 +207,8 @@ def main():
                     st.error("Password must be at least 8 characters")
                 elif signup_password != confirm_password:
                     st.error("Passwords do not match")
+                elif role == "resident" and not unit_number:
+                    st.error("Please enter your unit number")
                 elif not agree:
                     st.error("Please agree to the Terms of Service")
                 else:
@@ -238,19 +228,23 @@ def main():
                     if "error" in result:
                         st.error(f"❌ {result['error']}")
                     else:
-                        # Auto-login after signup
-                        st.session_state.authenticated = True
-                        st.session_state.access_token = result["access_token"]
-                        st.session_state.refresh_token = result["refresh_token"]
-                        st.session_state.user_id = result["user"]["id"]
-                        st.session_state.user_name = result["user"]["full_name"]
-                        st.session_state.user_role = result["user"]["role"]
-                        st.session_state.user_email = result["user"]["email"]
-                        st.session_state.permissions = result["user"]["permissions"]
+                        store_user_session(result)
                         
                         st.success(f"✅ Account created! Welcome, {result['user']['full_name']}!")
                         st.balloons()
                         st.rerun()
+    
+    # Demo accounts info
+    st.markdown("---")
+    st.markdown("### 🧪 Demo Accounts")
+    st.markdown("""
+    | Role | Email | Password |
+    |------|-------|----------|
+    | Resident | resident@demo.com | demo1234 |
+    | Receptionist | reception@demo.com | demo1234 |
+    | Security Guard | guard@demo.com | demo1234 |
+    | Admin | admin@demo.com | admin1234 |
+    """)
     
     # Footer
     st.markdown("---")
