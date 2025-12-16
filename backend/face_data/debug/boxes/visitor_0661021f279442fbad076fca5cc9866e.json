@@ -1,0 +1,13 @@
+[
+  {
+    "index": 0,
+    "confidence": 1.0,
+    "box": {
+      "x": 441,
+      "y": 129,
+      "w": 193,
+      "h": 274
+    },
+    "crop_path": "face_data/debug/crops/visitor_0661021f279442fbad076fca5cc9866e_0.jpg"
+  }
+]

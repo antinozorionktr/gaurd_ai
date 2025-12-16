@@ -137,7 +137,8 @@ def verify_entry(
         
         if person_type == 'visitor':
             # Get visitor from DB
-            visitor = db.query(Visitor).filter(Visitor.id == int(person_id)).first()
+            face_id = match.get('face_id')
+            visitor = db.query(Visitor).filter(Visitor.face_id == face_id).first()
             
             if visitor:
                 # Validate visitor entry
